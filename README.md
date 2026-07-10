@@ -102,6 +102,13 @@ given run takes.
   rules as the scheduled job.
 - **`totalAmount` is computed, not stored**, to guarantee it's always consistent with the
   order's actual line items.
+- **All status transitions — manual and scheduled — go through one gate**
+  (`OrderService.applyTransition`), so the legal-transition rules can't drift between the
+  `PUT /{id}/status` endpoint and the background job.
+- **Optimistic locking (`@Version`) on `Order`**: guards against a lost update if the
+  scheduler promotes an order to `PROCESSING` at the same moment a customer cancels it.
+- **`Order.getItems()` returns an unmodifiable view**, not the live list, so callers can't
+  mutate an order's line items without going through `addItem()`.
 
 ## AI usage
 

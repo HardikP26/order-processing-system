@@ -45,6 +45,37 @@ exception handling, and both the unit and integration test suites.
   logic bugs surfaced once it actually ran, which I'm reporting exactly as it happened
   rather than inventing a bug story to sound more thorough than the process actually was.
 
+## Hardening pass (post-review, before submission)
+
+After the initial build was green, I asked for a second review specifically against
+software design principles/standards (not just "does it meet the functional spec"). That
+surfaced a few real gaps, which I had fixed and re-verified with a full test run rather
+than taking on faith:
+
+- The catch-all `@ExceptionHandler(Exception.class)` returned a generic 500 without
+  logging the underlying exception — undebuggable in production. Added `log.error(...)`.
+- `promoteAllPendingToProcessing()` (the scheduled job's entry point) set the new status
+  directly instead of going through the same `ALLOWED_TRANSITIONS` gate as the manual
+  `PUT /{id}/status` endpoint — a DRY violation that could silently drift if the state
+  machine changed. Extracted a shared `applyTransition` method both paths now call.
+- `Order.getItems()` returned the live, mutable internal list — an encapsulation leak.
+  Changed to return `Collections.unmodifiableList(...)`.
+- No optimistic locking on `Order`, so a scheduler run and a customer's cancel request
+  landing at the same instant could silently lose one of the two updates. Added a
+  `@Version` field.
+- `OrderStatusScheduler` had no test of its own. Added one — and in writing it, hit a real
+  environment issue: Mockito's default mock maker can't mock a *concrete class*
+  (`OrderService`) on JDK 25, since Byte Buddy's inline retransformation only officially
+  supports up to JDK 23. Bumping `mockito.version` to pull in a newer Byte Buddy made
+  things *worse* (broke every existing test with a `MockMaker` plugin load failure from a
+  version mismatch elsewhere in the dependency graph), so I reverted that and rewrote the
+  test to mock `OrderRepository` (an interface — a different, unaffected mocking code
+  path) and exercise the real `OrderService` instead. Re-ran the full suite after each
+  change rather than assuming the fix worked.
+
+Final state: 17/17 tests passing (15 original + 2 new), verified with a real `mvnd test`
+run, not inferred from the diff.
+
 ## What I did NOT just accept as-is
 
 - I read every file rather than only running `mvn test` and trusting a green build — a

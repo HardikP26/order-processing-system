@@ -84,11 +84,7 @@ public class OrderService {
     public OrderResponse updateStatus(Long id, OrderStatus newStatus) {
         Order order = findOrderOrThrow(id);
         OrderStatus current = order.getStatus();
-        if (!ALLOWED_TRANSITIONS.getOrDefault(current, EnumSet.noneOf(OrderStatus.class)).contains(newStatus)) {
-            throw new InvalidOrderStateException(
-                    "Cannot transition order %d from %s to %s.".formatted(id, current, newStatus));
-        }
-        order.setStatus(newStatus);
+        applyTransition(order, newStatus);
         log.info("Order {} transitioned from {} to {}", id, current, newStatus);
         return OrderResponse.from(order);
     }
@@ -100,9 +96,22 @@ public class OrderService {
     public int promoteAllPendingToProcessing() {
         List<Order> pending = orderRepository.findByStatus(OrderStatus.PENDING);
         for (Order order : pending) {
-            order.setStatus(OrderStatus.PROCESSING);
+            applyTransition(order, OrderStatus.PROCESSING);
         }
         return pending.size();
+    }
+
+    /**
+     * Single gate all status changes pass through, so ALLOWED_TRANSITIONS can never
+     * drift between the manual endpoint and the scheduled job.
+     */
+    private void applyTransition(Order order, OrderStatus newStatus) {
+        OrderStatus current = order.getStatus();
+        if (!ALLOWED_TRANSITIONS.getOrDefault(current, EnumSet.noneOf(OrderStatus.class)).contains(newStatus)) {
+            throw new InvalidOrderStateException(
+                    "Cannot transition order %d from %s to %s.".formatted(order.getId(), current, newStatus));
+        }
+        order.setStatus(newStatus);
     }
 
     private Order findOrderOrThrow(Long id) {
