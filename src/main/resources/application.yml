@@ -1,0 +1,29 @@
+spring:
+  application:
+    name: order-processing-system
+  datasource:
+    url: jdbc:h2:mem:orderdb;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    open-in-view: false
+
+order:
+  pending-promotion:
+    interval-ms: 300000
+
+logging:
+  level:
+    com.hardik.orderprocessing: INFO
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
