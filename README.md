@@ -18,10 +18,15 @@ background job that promotes `PENDING` orders to `PROCESSING` every 5 minutes.
 mvn spring-boot:run
 ```
 
-The API is then available at `http://localhost:8080`, and Swagger UI at
-`http://localhost:8080/swagger-ui.html`. The H2 console (if you want to inspect the
-in-memory DB directly) is at `http://localhost:8080/h2-console`
+The API is then available at `http://localhost:9090`, and Swagger UI at
+`http://localhost:9090/swagger-ui.html`. The H2 console (if you want to inspect the
+in-memory DB directly) is at `http://localhost:9090/h2-console`
 (JDBC URL: `jdbc:h2:mem:orderdb`, user `sa`, no password).
+
+Port defaults to `9090` (see `server.port` in `application.yml`) to sidestep the common
+`8080` conflict with other local services (Postgres/pgAdmin, other Spring apps, etc.).
+Override it without editing the file via `SERVER_PORT=8081 mvn spring-boot:run` or
+`mvn spring-boot:run "-Dspring-boot.run.arguments=--server.port=8081"`.
 
 Run the test suite:
 
@@ -60,7 +65,7 @@ Any transition not shown above (e.g. `PENDING` straight to `DELIVERED`, or updat
 ### Example: create an order
 
 ```bash
-curl -X POST http://localhost:8080/api/orders \
+curl -X POST http://localhost:9090/api/orders \
   -H "Content-Type: application/json" \
   -d '{
     "customerName": "Hardik Parmar",
@@ -76,7 +81,7 @@ Returns `201 Created` with the order, `status: "PENDING"`, and `totalAmount: 115
 ### Example: list only shipped orders
 
 ```bash
-curl http://localhost:8080/api/orders?status=SHIPPED
+curl http://localhost:9090/api/orders?status=SHIPPED
 ```
 
 ## The background job
