@@ -9,6 +9,7 @@ import com.hardik.orderprocessing.model.Order;
 import com.hardik.orderprocessing.model.OrderItem;
 import com.hardik.orderprocessing.model.OrderStatus;
 import com.hardik.orderprocessing.repository.OrderRepository;
+import com.hardik.orderprocessing.repository.OrderStatusHistoryRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -31,11 +32,14 @@ class OrderServiceTest {
     @Mock
     private OrderRepository orderRepository;
 
+    @Mock
+    private OrderStatusHistoryRepository orderStatusHistoryRepository;
+
     private OrderService orderService;
 
     @BeforeEach
     void setUp() {
-        orderService = new OrderService(orderRepository);
+        orderService = new OrderService(orderRepository, orderStatusHistoryRepository);
     }
 
     private Order pendingOrderWithId(Long id) {

@@ -1,16 +1,38 @@
 package com.hardik.orderprocessing.model;
 
+import com.hardik.orderprocessing.exception.InvalidOrderStateException;
 import jakarta.persistence.*;
+import org.springframework.data.annotation.CreatedDate;
+import org.springframework.data.annotation.LastModifiedDate;
+import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
 
 @Entity
-@Table(name = "orders")
+@EntityListeners(AuditingEntityListener.class)
+@Table(name = "orders", indexes = @Index(name = "idx_order_status", columnList = "status"))
 public class Order {
+
+    /**
+     * Legal forward transitions, owned by the entity so it can enforce its own invariants
+     * regardless of which caller (API endpoint or scheduled job) is driving the change.
+     */
+    private static final Map<OrderStatus, EnumSet<OrderStatus>> ALLOWED_TRANSITIONS = new EnumMap<>(OrderStatus.class);
+
+    static {
+        ALLOWED_TRANSITIONS.put(OrderStatus.PENDING, EnumSet.of(OrderStatus.PROCESSING, OrderStatus.CANCELLED));
+        ALLOWED_TRANSITIONS.put(OrderStatus.PROCESSING, EnumSet.of(OrderStatus.SHIPPED));
+        ALLOWED_TRANSITIONS.put(OrderStatus.SHIPPED, EnumSet.of(OrderStatus.DELIVERED));
+        ALLOWED_TRANSITIONS.put(OrderStatus.DELIVERED, EnumSet.noneOf(OrderStatus.class));
+        ALLOWED_TRANSITIONS.put(OrderStatus.CANCELLED, EnumSet.noneOf(OrderStatus.class));
+    }
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -23,12 +45,14 @@ public class Order {
     @Column(nullable = false)
     private OrderStatus status;
 
-    @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.EAGER)
+    @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private List<OrderItem> items = new ArrayList<>();
 
-    @Column(nullable = false)
+    @CreatedDate
+    @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
+    @LastModifiedDate
     @Column(nullable = false)
     private LocalDateTime updatedAt;
 
@@ -40,16 +64,9 @@ public class Order {
 
     @PrePersist
     protected void onCreate() {
-        this.createdAt = LocalDateTime.now();
-        this.updatedAt = LocalDateTime.now();
         if (this.status == null) {
             this.status = OrderStatus.PENDING;
         }
-    }
-
-    @PreUpdate
-    protected void onUpdate() {
-        this.updatedAt = LocalDateTime.now();
     }
 
     public BigDecimal getTotalAmount() {
@@ -61,6 +78,23 @@ public class Order {
     public void addItem(OrderItem item) {
         items.add(item);
         item.setOrder(this);
+    }
+
+    /**
+     * Applies a status transition if (and only if) it's legal from the current status,
+     * throwing InvalidOrderStateException otherwise. The single gate every transition
+     * — manual endpoint or scheduled job — has to pass through.
+     */
+    public void transitionTo(OrderStatus newStatus) {
+        if (!ALLOWED_TRANSITIONS.getOrDefault(status, EnumSet.noneOf(OrderStatus.class)).contains(newStatus)) {
+            throw new InvalidOrderStateException(
+                    "Cannot transition order %d from %s to %s.".formatted(id, status, newStatus));
+        }
+        this.status = newStatus;
+    }
+
+    public boolean isPending() {
+        return status == OrderStatus.PENDING;
     }
 
     public Long getId() {

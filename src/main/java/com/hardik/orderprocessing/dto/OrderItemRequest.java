@@ -4,12 +4,14 @@ import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
 
 public class OrderItemRequest {
 
     @NotBlank(message = "productName is required")
+    @Size(max = 255, message = "productName must be at most 255 characters")
     private String productName;
 
     @NotNull(message = "quantity is required")

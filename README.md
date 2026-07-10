@@ -49,18 +49,24 @@ PENDING --> PROCESSING --> SHIPPED --> DELIVERED
 ```
 
 Any transition not shown above (e.g. `PENDING` straight to `DELIVERED`, or updating a
-`DELIVERED` order at all) is rejected with `409 Conflict`. This lives in one place —
-`OrderService.ALLOWED_TRANSITIONS` — so the rules can't drift between endpoints.
+`DELIVERED` order at all) is rejected with `409 Conflict`. Enforced by `Order.transitionTo()`
+on the entity itself — the single gate every transition (manual endpoint or scheduled job)
+passes through, so the rules can't drift between callers.
 
 ## API endpoints
 
-| Method | Path                      | Description                                      |
-|--------|---------------------------|---------------------------------------------------|
-| POST   | `/api/orders`             | Create an order with one or more items            |
-| GET    | `/api/orders/{id}`        | Get a single order by id                           |
-| GET    | `/api/orders?status=X`    | List all orders, optionally filtered by status     |
-| PUT    | `/api/orders/{id}/cancel` | Cancel an order (only if still `PENDING`)          |
-| PUT    | `/api/orders/{id}/status` | Manually advance an order to the next legal status |
+| Method | Path                        | Description                                        |
+|--------|-----------------------------|-----------------------------------------------------|
+| POST   | `/api/orders`               | Create an order with one or more items              |
+| GET    | `/api/orders/{id}`          | Get a single order by id                             |
+| GET    | `/api/orders?status=X`      | List all orders, optionally filtered by status       |
+| GET    | `/api/orders/{id}/history`  | Full status-transition audit trail for an order      |
+| PUT    | `/api/orders/{id}/cancel`   | Cancel an order (only if still `PENDING`)            |
+| PUT    | `/api/orders/{id}/status`   | Manually advance an order to the next legal status   |
+
+Errors are returned as RFC 7807 `ProblemDetail` (`type`/`title`/`status`/`detail`/`instance`,
+plus a `details` array for field-level validation errors) — Spring Boot 3's native error
+format, not a hand-rolled shape.
 
 ### Example: create an order
 
@@ -111,9 +117,42 @@ given run takes.
   (`OrderService.applyTransition`), so the legal-transition rules can't drift between the
   `PUT /{id}/status` endpoint and the background job.
 - **Optimistic locking (`@Version`) on `Order`**: guards against a lost update if the
-  scheduler promotes an order to `PROCESSING` at the same moment a customer cancels it.
+  scheduler promotes an order to `PROCESSING` at the same moment a customer cancels it —
+  the loser gets a `409 Conflict`, not a silently overwritten row. Covered by
+  `OrderConcurrencyTest`, which simulates two stale readers racing to write.
 - **`Order.getItems()` returns an unmodifiable view**, not the live list, so callers can't
   mutate an order's line items without going through `addItem()`.
+- **`OrderStatusHistory`** records every transition (from/to status, timestamp, and which
+  code path drove it — `API` or `SCHEDULER`) via `GET /api/orders/{id}/history`. No `actor`
+  field: this system has no authentication/identity concept, so there's no real actor to
+  record — adding a fake one would be worse than omitting it.
+- **`items` is lazy-loaded** (`FetchType.LAZY`) with `@EntityGraph` on the repository's
+  read queries, so list/get endpoints fetch items in one batched query instead of N+1,
+  without eagerly loading items everywhere by default.
+- **Actuator + Micrometer**: `/actuator/health` and `/actuator/metrics`, plus scheduler-specific
+  counters (`orders.scheduler.promoted`, `orders.scheduler.failures`) and a timer
+  (`orders.scheduler.duration`).
+- **Correlation ID**: every request gets an `X-Correlation-Id` (reused from the request
+  header if the caller sends one), echoed in the response and available to every log line
+  via MDC — `%X{correlationId}` in the console pattern.
+
+## Deliberately not done
+
+A few "production readiness" items were considered and skipped, on purpose, not by omission:
+
+- **State Pattern (class per status)** instead of the transition-gate approach — five
+  states don't justify five classes and an interface; would be premature abstraction.
+- **Flyway migrations** — contradicts the zero-setup, in-memory-H2 design; Flyway earns its
+  keep on a persistent DB with schema evolving across deployments, not a DB that resets
+  every run.
+- **Pagination on `GET /api/orders`** — not in the assignment spec, and changes the response
+  from a plain array to a wrapped page, breaking the existing contract for no real benefit
+  at this scale.
+- **Spring Security + JWT, rate limiting** — no auth/rate-limiting requirement in the spec;
+  both are significant new scope with real risk of shipping half-finished this close to a
+  deadline.
+- **MapStruct** — the 4 hand-written DTO factory methods are trivial and explicit; a codegen
+  mapper would trade readability for no real gain here.
 
 ## AI usage
 

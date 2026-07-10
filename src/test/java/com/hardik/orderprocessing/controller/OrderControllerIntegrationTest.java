@@ -58,7 +58,7 @@ class OrderControllerIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").value("Validation Failed"));
+                .andExpect(jsonPath("$.title").value("Validation Failed"));
     }
 
     @Test
@@ -79,7 +79,7 @@ class OrderControllerIntegrationTest {
     void getOrder_whenMissing_returns404() throws Exception {
         mockMvc.perform(get("/api/orders/{id}", 999999L))
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.error").value("Not Found"));
+                .andExpect(jsonPath("$.title").value("Not Found"));
     }
 
     @Test
@@ -106,7 +106,7 @@ class OrderControllerIntegrationTest {
 
         mockMvc.perform(put("/api/orders/{id}/cancel", id))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error").value("Conflict"));
+                .andExpect(jsonPath("$.title").value("Conflict"));
     }
 
     @Test

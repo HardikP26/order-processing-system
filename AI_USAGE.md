@@ -76,6 +76,45 @@ than taking on faith:
 Final state: 17/17 tests passing (15 original + 2 new), verified with a real `mvnd test`
 run, not inferred from the diff.
 
+## "Lead engineer standards" pass
+
+Later I was handed a 10-category, ~30-item checklist (performance, DDD, concurrency,
+modern Java, production readiness, API design, observability, testing, security) generated
+by another AI tool and asked to implement all of it. I didn't do that blindly — I triaged
+it first, because several items directly contradicted design calls already made and
+justified earlier in this document (see "Deliberately not done" in the README for the full
+list and reasoning — State Pattern, Flyway, pagination, auth/rate-limiting, MapStruct were
+all explicitly rejected as over-engineering for this assignment's actual scope).
+
+What I did implement, all re-verified with a full `mvnd test` run plus a live curl smoke
+test after each change (not assumed from the diff):
+
+- `items` fetch changed `EAGER` → `LAZY` with `@EntityGraph` on the repository's read
+  queries, and an index added on `orders.status`.
+- Transition logic moved onto the entity (`Order.transitionTo()`) — richer domain model,
+  same external behavior (existing tests didn't need to change).
+- `OrderStatusHistory` audit trail + `GET /api/orders/{id}/history`, deliberately without
+  an `actor` field since there's no auth system to source one from honestly.
+- Optimistic-lock conflicts now return a proper `409` instead of falling through to the
+  generic 500 handler. Added `OrderConcurrencyTest`, which simulates two stale readers
+  racing to write the same row and asserts the second one fails.
+- JPA auditing (`@CreatedDate`/`@LastModifiedDate`) replacing the hand-rolled
+  `@PrePersist`/`@PreUpdate` timestamp logic.
+- Errors migrated to Spring Boot 3's native RFC 7807 `ProblemDetail` — this changed the
+  JSON error shape (`error` → `title`), so I updated the three existing tests asserting on
+  it rather than leaving them silently passing against the wrong contract.
+- Actuator + Micrometer, with scheduler-specific counters/timer, and a correlation-ID
+  filter (MDC-based, `X-Correlation-Id` header).
+- `@Size` constraints on free-text fields. Note: I did *not* claim this as "XSS
+  sanitization" (the checklist's phrasing) — this is a JSON API, not rendering HTML
+  server-side, so XSS isn't actually a server-side concern here; escaping on render is the
+  client's job. Calling a length cap "security" would have been dishonest.
+- New `OrderRepositoryTest` (`@DataJpaTest`) covering the custom query method and that
+  items/timestamps actually persist and reload correctly.
+
+Full suite after this pass: 20/20 passing (17 prior + 3 new: 2 repository tests, 1
+concurrency test).
+
 ## What I did NOT just accept as-is
 
 - I read every file rather than only running `mvn test` and trusting a green build — a

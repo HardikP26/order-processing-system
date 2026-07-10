@@ -3,21 +3,20 @@ package com.hardik.orderprocessing.service;
 import com.hardik.orderprocessing.dto.CreateOrderRequest;
 import com.hardik.orderprocessing.dto.OrderItemRequest;
 import com.hardik.orderprocessing.dto.OrderResponse;
-import com.hardik.orderprocessing.exception.InvalidOrderStateException;
+import com.hardik.orderprocessing.dto.OrderStatusHistoryResponse;
 import com.hardik.orderprocessing.exception.OrderNotFoundException;
 import com.hardik.orderprocessing.model.Order;
 import com.hardik.orderprocessing.model.OrderItem;
 import com.hardik.orderprocessing.model.OrderStatus;
+import com.hardik.orderprocessing.model.OrderStatusHistory;
 import com.hardik.orderprocessing.repository.OrderRepository;
+import com.hardik.orderprocessing.repository.OrderStatusHistoryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.EnumMap;
-import java.util.EnumSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 
 @Service
@@ -26,24 +25,12 @@ public class OrderService {
 
     private static final Logger log = LoggerFactory.getLogger(OrderService.class);
 
-    /**
-     * Legal forward transitions. Anything not listed here is rejected,
-     * which is what keeps an order from jumping e.g. PENDING -> DELIVERED directly.
-     */
-    private static final Map<OrderStatus, EnumSet<OrderStatus>> ALLOWED_TRANSITIONS = new EnumMap<>(OrderStatus.class);
-
-    static {
-        ALLOWED_TRANSITIONS.put(OrderStatus.PENDING, EnumSet.of(OrderStatus.PROCESSING, OrderStatus.CANCELLED));
-        ALLOWED_TRANSITIONS.put(OrderStatus.PROCESSING, EnumSet.of(OrderStatus.SHIPPED));
-        ALLOWED_TRANSITIONS.put(OrderStatus.SHIPPED, EnumSet.of(OrderStatus.DELIVERED));
-        ALLOWED_TRANSITIONS.put(OrderStatus.DELIVERED, EnumSet.noneOf(OrderStatus.class));
-        ALLOWED_TRANSITIONS.put(OrderStatus.CANCELLED, EnumSet.noneOf(OrderStatus.class));
-    }
-
     private final OrderRepository orderRepository;
+    private final OrderStatusHistoryRepository orderStatusHistoryRepository;
 
-    public OrderService(OrderRepository orderRepository) {
+    public OrderService(OrderRepository orderRepository, OrderStatusHistoryRepository orderStatusHistoryRepository) {
         this.orderRepository = orderRepository;
+        this.orderStatusHistoryRepository = orderStatusHistoryRepository;
     }
 
     public OrderResponse createOrder(CreateOrderRequest request) {
@@ -53,6 +40,7 @@ public class OrderService {
             order.addItem(new OrderItem(itemRequest.getProductName(), itemRequest.getQuantity(), itemRequest.getPrice()));
         }
         Order saved = orderRepository.save(order);
+        recordHistory(saved, null, OrderStatusHistory.Source.API);
         log.info("Created order {} for customer '{}' with {} item(s)", saved.getId(), saved.getCustomerName(), saved.getItems().size());
         return OrderResponse.from(saved);
     }
@@ -69,49 +57,47 @@ public class OrderService {
         return orders.stream().map(OrderResponse::from).toList();
     }
 
+    @Transactional(readOnly = true)
+    public List<OrderStatusHistoryResponse> getOrderHistory(Long id) {
+        findOrderOrThrow(id);
+        return orderStatusHistoryRepository.findByOrderIdOrderByChangedAtAsc(id).stream()
+                .map(OrderStatusHistoryResponse::from)
+                .toList();
+    }
+
     public OrderResponse cancelOrder(Long id) {
         Order order = findOrderOrThrow(id);
-        if (order.getStatus() != OrderStatus.PENDING) {
-            throw new InvalidOrderStateException(
-                    "Order %d cannot be cancelled because it is already %s. Only PENDING orders can be cancelled."
-                            .formatted(id, order.getStatus()));
-        }
-        order.setStatus(OrderStatus.CANCELLED);
+        OrderStatus previous = order.getStatus();
+        order.transitionTo(OrderStatus.CANCELLED);
+        recordHistory(order, previous, OrderStatusHistory.Source.API);
         log.info("Cancelled order {}", id);
         return OrderResponse.from(order);
     }
 
     public OrderResponse updateStatus(Long id, OrderStatus newStatus) {
         Order order = findOrderOrThrow(id);
-        OrderStatus current = order.getStatus();
-        applyTransition(order, newStatus);
-        log.info("Order {} transitioned from {} to {}", id, current, newStatus);
+        OrderStatus previous = order.getStatus();
+        order.transitionTo(newStatus);
+        recordHistory(order, previous, OrderStatusHistory.Source.API);
+        log.info("Order {} transitioned from {} to {}", id, previous, newStatus);
         return OrderResponse.from(order);
     }
 
     /**
      * Used by the scheduled job: promotes every PENDING order to PROCESSING.
-     * Returns the number of orders updated, purely so the scheduler can log something useful.
+     * Returns the number of orders updated, purely so the scheduler can log/measure something useful.
      */
     public int promoteAllPendingToProcessing() {
         List<Order> pending = orderRepository.findByStatus(OrderStatus.PENDING);
         for (Order order : pending) {
-            applyTransition(order, OrderStatus.PROCESSING);
+            order.transitionTo(OrderStatus.PROCESSING);
+            recordHistory(order, OrderStatus.PENDING, OrderStatusHistory.Source.SCHEDULER);
         }
         return pending.size();
     }
 
-    /**
-     * Single gate all status changes pass through, so ALLOWED_TRANSITIONS can never
-     * drift between the manual endpoint and the scheduled job.
-     */
-    private void applyTransition(Order order, OrderStatus newStatus) {
-        OrderStatus current = order.getStatus();
-        if (!ALLOWED_TRANSITIONS.getOrDefault(current, EnumSet.noneOf(OrderStatus.class)).contains(newStatus)) {
-            throw new InvalidOrderStateException(
-                    "Cannot transition order %d from %s to %s.".formatted(order.getId(), current, newStatus));
-        }
-        order.setStatus(newStatus);
+    private void recordHistory(Order order, OrderStatus fromStatus, OrderStatusHistory.Source source) {
+        orderStatusHistoryRepository.save(new OrderStatusHistory(order.getId(), fromStatus, order.getStatus(), source));
     }
 
     private Order findOrderOrThrow(Long id) {
