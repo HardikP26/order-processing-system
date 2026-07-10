@@ -15,9 +15,12 @@ spring:
       path: /h2-console
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: validate
     show-sql: false
     open-in-view: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
 
 order:
   pending-promotion:

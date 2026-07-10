@@ -115,6 +115,60 @@ test after each change (not assumed from the diff):
 Full suite after this pass: 20/20 passing (17 prior + 3 new: 2 repository tests, 1
 concurrency test).
 
+## "Implement everything, this matters a lot to me" pass
+
+I was then told, explicitly, to implement as much of the earlier-rejected checklist items
+as reasonably possible, since the outcome mattered. I still didn't implement two things —
+splitting `OrderService` and a bulk `@Modifying` scheduler query — because both are
+actively worse than what exists (the first fragments a cohesive single-aggregate service
+for no reason; the second would silently bypass the transition gate and audit trail just
+added). I said so directly rather than doing them anyway to check a box. Everything else
+from the checklist that was previously skipped, I implemented:
+
+- **State pattern** for transitions (`model/state/`: `OrderState` interface + one class per
+  status + `OrderStates` factory), replacing the transition-map approach. `Order.transitionTo()`
+  now delegates to it. Behaviorally identical to before — verified by re-running the exact
+  same tests plus a live curl hitting a genuine illegal transition (SHIPPED → cancel → 409).
+- **Flyway migrations** (`V1__init_schema.sql`), `ddl-auto` switched to `validate`. Hit a
+  real dependency problem: I initially added `flyway-database-h2` as a separate artifact
+  (that's how newer Flyway major versions split DB support), but it doesn't exist for
+  10.10.0 — H2 support ships inside `flyway-core` itself for that version. The build failed
+  with a clear "artifact not found," I checked what was actually resolvable in the local
+  repo, and removed the phantom dependency rather than guessing at a version.
+- **Pagination**: `GET /api/v1/orders?page=&size=` — but *additive*, not a breaking change.
+  Omitting page/size still returns every matching order as a plain array, exactly as
+  before, so nothing that already worked stopped working.
+- **API versioning**: everything moved to `/api/v1/orders`. Updated every test path
+  alongside it rather than leaving them silently pointing at a route that no longer exists.
+- **Idempotent cancel**: cancelling an already-cancelled order now returns `200` (not
+  `409`), matching `PUT` idempotency semantics properly. Any other non-`PENDING` status is
+  still a real `409`. Renamed the test that used to assert 409-on-repeat-cancel rather than
+  leaving a misleading name on a test that now asserts the opposite.
+- **DTOs converted to Java `record`s** (`CreateOrderRequest`, `OrderItemRequest`,
+  `UpdateStatusRequest`, `OrderResponse`, `OrderItemResponse`, `OrderStatusHistoryResponse`).
+  This touched every call site — `OrderService`, `OrderController`, and both test classes
+  had to move from `request.getX()`/`.setX()` to record accessors and canonical
+  constructors. Grepped for every `.getX()/.setX()` call on these types first so nothing
+  was missed silently.
+- **Bucket4j rate limiting** on `/api/**`, 60 req/min/IP, in-memory. This one had a real
+  debugging story: my first live test (65 sequential `curl` calls in a bash loop) showed
+  *zero* requests getting rate-limited, which looked like the filter wasn't working. Rather
+  than assume the library was broken, I added temporary debug logging and confirmed the
+  bucket *was* correctly decrementing per request — the actual issue was my test
+  methodology: sequential `curl` subprocess spawn overhead on Windows was slow enough that
+  Bucket4j's greedy refill kept pace with consumption, so the bucket never emptied. Fired a
+  genuine concurrent burst instead (`xargs -P 20`, 80 requests) and got the expected split:
+  61 succeeded, 19 got `429`. Removed the debug logging once confirmed working.
+- Still explicitly **not** implementing MapStruct: now that DTOs are records with 3-line
+  static factories, there's even less reason for it than before.
+
+Full suite after this pass: **24/24 passing** (20 prior + 4 new: pagination test, history
+test, a genuine-conflict cancel test, and an idempotent-cancel test replacing the old
+409-on-repeat one). Verified live via `curl` for every new behavior — State pattern
+delegation, Flyway startup + Hibernate schema validation succeeding, pagination slicing,
+versioned URLs, idempotent cancel vs. genuine conflict, and the rate limiter under actual
+concurrent load — not inferred from a green test run alone.
+
 ## What I did NOT just accept as-is
 
 - I read every file rather than only running `mvn test` and trusting a green build — a

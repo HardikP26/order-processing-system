@@ -5,38 +5,19 @@ import com.hardik.orderprocessing.model.OrderStatusHistory;
 
 import java.time.LocalDateTime;
 
-public class OrderStatusHistoryResponse {
-
-    private OrderStatus fromStatus;
-    private OrderStatus toStatus;
-    private LocalDateTime changedAt;
-    private OrderStatusHistory.Source source;
-
-    public OrderStatusHistoryResponse() {
-    }
+public record OrderStatusHistoryResponse(
+        OrderStatus fromStatus,
+        OrderStatus toStatus,
+        LocalDateTime changedAt,
+        OrderStatusHistory.Source source
+) {
 
     public static OrderStatusHistoryResponse from(OrderStatusHistory history) {
-        OrderStatusHistoryResponse response = new OrderStatusHistoryResponse();
-        response.fromStatus = history.getFromStatus();
-        response.toStatus = history.getToStatus();
-        response.changedAt = history.getChangedAt();
-        response.source = history.getSource();
-        return response;
-    }
-
-    public OrderStatus getFromStatus() {
-        return fromStatus;
-    }
-
-    public OrderStatus getToStatus() {
-        return toStatus;
-    }
-
-    public LocalDateTime getChangedAt() {
-        return changedAt;
-    }
-
-    public OrderStatusHistory.Source getSource() {
-        return source;
+        return new OrderStatusHistoryResponse(
+                history.getFromStatus(),
+                history.getToStatus(),
+                history.getChangedAt(),
+                history.getSource()
+        );
     }
 }

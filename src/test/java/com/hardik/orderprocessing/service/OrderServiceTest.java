@@ -53,13 +53,9 @@ class OrderServiceTest {
 
     @Test
     void createOrder_savesOrderWithItemsAndReturnsResponse() {
-        CreateOrderRequest request = new CreateOrderRequest();
-        request.setCustomerName("Hardik Parmar");
-        OrderItemRequest itemRequest = new OrderItemRequest();
-        itemRequest.setProductName("Mechanical Keyboard");
-        itemRequest.setQuantity(2);
-        itemRequest.setPrice(new BigDecimal("75.50"));
-        request.setItems(List.of(itemRequest));
+        CreateOrderRequest request = new CreateOrderRequest(
+                "Hardik Parmar",
+                List.of(new OrderItemRequest("Mechanical Keyboard", 2, new BigDecimal("75.50"))));
 
         when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> {
             Order toSave = invocation.getArgument(0);
@@ -75,8 +71,8 @@ class OrderServiceTest {
 
         assertThat(savedOrder.getCustomerName()).isEqualTo("Hardik Parmar");
         assertThat(savedOrder.getItems()).hasSize(1);
-        assertThat(response.getId()).isEqualTo(1L);
-        assertThat(response.getTotalAmount()).isEqualByComparingTo("151.00");
+        assertThat(response.id()).isEqualTo(1L);
+        assertThat(response.totalAmount()).isEqualByComparingTo("151.00");
     }
 
     @Test
@@ -95,11 +91,23 @@ class OrderServiceTest {
 
         OrderResponse response = orderService.cancelOrder(5L);
 
-        assertThat(response.getStatus()).isEqualTo(OrderStatus.CANCELLED);
+        assertThat(response.status()).isEqualTo(OrderStatus.CANCELLED);
     }
 
     @Test
-    void cancelOrder_whenNotPending_throwsInvalidOrderStateException() {
+    void cancelOrder_whenAlreadyCancelled_isIdempotentNoOp() {
+        Order order = pendingOrderWithId(9L);
+        order.setStatus(OrderStatus.CANCELLED);
+        when(orderRepository.findById(9L)).thenReturn(Optional.of(order));
+
+        OrderResponse response = orderService.cancelOrder(9L);
+
+        assertThat(response.status()).isEqualTo(OrderStatus.CANCELLED);
+        verify(orderStatusHistoryRepository, never()).save(any());
+    }
+
+    @Test
+    void cancelOrder_whenNotPendingOrCancelled_throwsInvalidOrderStateException() {
         Order order = pendingOrderWithId(6L);
         order.setStatus(OrderStatus.SHIPPED);
         when(orderRepository.findById(6L)).thenReturn(Optional.of(order));
@@ -117,7 +125,7 @@ class OrderServiceTest {
 
         OrderResponse response = orderService.updateStatus(7L, OrderStatus.SHIPPED);
 
-        assertThat(response.getStatus()).isEqualTo(OrderStatus.SHIPPED);
+        assertThat(response.status()).isEqualTo(OrderStatus.SHIPPED);
     }
 
     @Test
@@ -149,7 +157,7 @@ class OrderServiceTest {
     void listOrders_withStatusFilter_delegatesToFindByStatus() {
         when(orderRepository.findByStatus(OrderStatus.PENDING)).thenReturn(List.of(pendingOrderWithId(3L)));
 
-        List<OrderResponse> responses = orderService.listOrders(Optional.of(OrderStatus.PENDING));
+        List<OrderResponse> responses = orderService.listOrders(Optional.of(OrderStatus.PENDING), Optional.empty());
 
         assertThat(responses).hasSize(1);
         verify(orderRepository, never()).findAll();

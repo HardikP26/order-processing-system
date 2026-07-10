@@ -1,6 +1,8 @@
 package com.hardik.orderprocessing.model;
 
 import com.hardik.orderprocessing.exception.InvalidOrderStateException;
+import com.hardik.orderprocessing.model.state.OrderState;
+import com.hardik.orderprocessing.model.state.OrderStates;
 import jakarta.persistence.*;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.LastModifiedDate;
@@ -10,29 +12,12 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.EnumMap;
-import java.util.EnumSet;
 import java.util.List;
-import java.util.Map;
 
 @Entity
 @EntityListeners(AuditingEntityListener.class)
 @Table(name = "orders", indexes = @Index(name = "idx_order_status", columnList = "status"))
 public class Order {
-
-    /**
-     * Legal forward transitions, owned by the entity so it can enforce its own invariants
-     * regardless of which caller (API endpoint or scheduled job) is driving the change.
-     */
-    private static final Map<OrderStatus, EnumSet<OrderStatus>> ALLOWED_TRANSITIONS = new EnumMap<>(OrderStatus.class);
-
-    static {
-        ALLOWED_TRANSITIONS.put(OrderStatus.PENDING, EnumSet.of(OrderStatus.PROCESSING, OrderStatus.CANCELLED));
-        ALLOWED_TRANSITIONS.put(OrderStatus.PROCESSING, EnumSet.of(OrderStatus.SHIPPED));
-        ALLOWED_TRANSITIONS.put(OrderStatus.SHIPPED, EnumSet.of(OrderStatus.DELIVERED));
-        ALLOWED_TRANSITIONS.put(OrderStatus.DELIVERED, EnumSet.noneOf(OrderStatus.class));
-        ALLOWED_TRANSITIONS.put(OrderStatus.CANCELLED, EnumSet.noneOf(OrderStatus.class));
-    }
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -83,10 +68,12 @@ public class Order {
     /**
      * Applies a status transition if (and only if) it's legal from the current status,
      * throwing InvalidOrderStateException otherwise. The single gate every transition
-     * — manual endpoint or scheduled job — has to pass through.
+     * — manual endpoint or scheduled job — has to pass through. Delegates to the
+     * State pattern (com.hardik.orderprocessing.model.state) for the actual rule.
      */
     public void transitionTo(OrderStatus newStatus) {
-        if (!ALLOWED_TRANSITIONS.getOrDefault(status, EnumSet.noneOf(OrderStatus.class)).contains(newStatus)) {
+        OrderState currentState = OrderStates.forStatus(status);
+        if (!currentState.canTransitionTo(newStatus)) {
             throw new InvalidOrderStateException(
                     "Cannot transition order %d from %s to %s.".formatted(id, status, newStatus));
         }

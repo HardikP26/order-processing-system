@@ -9,6 +9,8 @@ import com.hardik.orderprocessing.service.OrderService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -17,7 +19,7 @@ import java.util.List;
 import java.util.Optional;
 
 @RestController
-@RequestMapping("/api/orders")
+@RequestMapping("/api/v1/orders")
 @Tag(name = "Orders", description = "Order creation, retrieval, status transitions, and cancellation")
 public class OrderController {
 
@@ -40,10 +42,16 @@ public class OrderController {
         return ResponseEntity.ok(orderService.getOrder(id));
     }
 
-    @Operation(summary = "List orders", description = "Lists all orders, optionally filtered by status.")
+    @Operation(summary = "List orders", description = "Lists orders, optionally filtered by status and optionally paginated via page/size. Omitting page/size returns every matching order.")
     @GetMapping
-    public ResponseEntity<List<OrderResponse>> listOrders(@RequestParam(required = false) OrderStatus status) {
-        return ResponseEntity.ok(orderService.listOrders(Optional.ofNullable(status)));
+    public ResponseEntity<List<OrderResponse>> listOrders(
+            @RequestParam(required = false) OrderStatus status,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer size) {
+        Optional<Pageable> pageable = (page != null && size != null)
+                ? Optional.of(PageRequest.of(page, size))
+                : Optional.empty();
+        return ResponseEntity.ok(orderService.listOrders(Optional.ofNullable(status), pageable));
     }
 
     @Operation(summary = "Get an order's status transition history")
@@ -52,7 +60,7 @@ public class OrderController {
         return ResponseEntity.ok(orderService.getOrderHistory(id));
     }
 
-    @Operation(summary = "Cancel an order", description = "Only allowed while the order is still PENDING.")
+    @Operation(summary = "Cancel an order", description = "Only allowed while the order is still PENDING. Idempotent: cancelling an already-cancelled order returns 200, not 409.")
     @PutMapping("/{id}/cancel")
     public ResponseEntity<OrderResponse> cancelOrder(@PathVariable Long id) {
         return ResponseEntity.ok(orderService.cancelOrder(id));
@@ -61,6 +69,6 @@ public class OrderController {
     @Operation(summary = "Manually advance an order's status", description = "Enforces the same legal-transition rules as the scheduled job.")
     @PutMapping("/{id}/status")
     public ResponseEntity<OrderResponse> updateStatus(@PathVariable Long id, @Valid @RequestBody UpdateStatusRequest request) {
-        return ResponseEntity.ok(orderService.updateStatus(id, request.getStatus()));
+        return ResponseEntity.ok(orderService.updateStatus(id, request.status()));
     }
 }
